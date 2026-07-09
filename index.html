@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Content Empire — Unified Pipeline Monitor</title>
+<title>Content Empire, Unified Pipeline Monitor</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -90,9 +90,14 @@
     const RAW = "https://raw.githubusercontent.com/tezarps/revenge-pipeline/main";
     const [status, storiesData] = await Promise.all([
       fetchJSON(`${RAW}/status.json`),
-      fetchJSON(`${RAW}/stories.json`, { stories: [] }),
+      fetchJSON(`${RAW}/stories.json`),
     ]);
-    const stories = (storiesData.stories || []).slice().reverse();
+    // Both requests failed (raw.githubusercontent.com rate limits fairly
+    // aggressively, seen directly 2026-07-09): signal "no update this
+    // cycle" so refreshAll keeps the previous successful card instead of
+    // replacing it with an empty one.
+    if (!status && !storiesData) return null;
+    const stories = ((storiesData && storiesData.stories) || []).slice().reverse();
     const isRunning = status && status.run_state === "running";
 
     let runHtml = "";
@@ -152,6 +157,7 @@
   async function renderApophenia() {
     const RAW = "https://raw.githubusercontent.com/tezarps/apophenia-pipeline/main";
     const status = await fetchJSON(`${RAW}/pipeline_status.json`);
+    if (!status) return null; // fetch failed this cycle, keep previous card
     const r = renderAgentPipeline(status);
     return { name: "Apophenia", link: "https://heyapophenia.vercel.app/", ...r };
   }
@@ -159,11 +165,16 @@
   async function renderNarava() {
     const RAW = "https://raw.githubusercontent.com/tezarps/narava-pipeline/main";
     const status = await fetchJSON(`${RAW}/pipeline_status.json`);
+    if (!status) return null; // fetch failed this cycle, keep previous card
     const r = renderAgentPipeline(status);
     return { name: "Narava", link: "https://github.com/tezarps/narava-pipeline", ...r };
   }
 
-  function cardHtml(c) {
+  function cardHtml(c, fallbackName) {
+    if (!c) {
+      return `<div class="channel-card"><div class="channel-head"><div class="channel-name">${esc(fallbackName)}</div></div>
+        <div class="empty">Gagal memuat (rate limit atau jaringan), coba lagi sebentar lagi.</div></div>`;
+    }
     return `<div class="channel-card">
       <div class="channel-head">
         <div class="channel-name">${esc(c.name)}</div>
@@ -176,9 +187,22 @@
     </div>`;
   }
 
+  // Last-known-good cache per channel: a single rate-limited fetch on one
+  // channel should never blank out that channel's card if it was already
+  // showing real data (confirmed as a real bug 2026-07-09 on the
+  // revenge-pipeline dashboard this hub embeds the same pattern from).
+  const lastCards = { gc: null, ap: null, nv: null };
+
   async function refreshAll() {
     const [gc, ap, nv] = await Promise.all([renderGoldenChild(), renderApophenia(), renderNarava()]);
-    document.getElementById("channels").innerHTML = [gc, ap, nv].map(cardHtml).join("");
+    if (gc) lastCards.gc = gc;
+    if (ap) lastCards.ap = ap;
+    if (nv) lastCards.nv = nv;
+    document.getElementById("channels").innerHTML = [
+      cardHtml(lastCards.gc, "Golden Child Stories"),
+      cardHtml(lastCards.ap, "Apophenia"),
+      cardHtml(lastCards.nv, "Narava"),
+    ].join("");
   }
   refreshAll();
   setInterval(refreshAll, 60000);
