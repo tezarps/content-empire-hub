@@ -67,6 +67,17 @@
   .empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
 
   .refresh-note { text-align: center; color: var(--muted); font-size: 11px; margin-top: 24px; }
+
+  .prompts-section { margin-top: 24px; }
+  .prompts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 12px; }
+  .prompt-card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 16px; box-shadow: var(--shadow); }
+  .prompt-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .prompt-name { font-size: 16px; font-weight: 800; }
+  .prompt-angle { color: var(--muted); font-size: 12px; margin-bottom: 10px; line-height: 1.4; }
+  .prompt-text { width: 100%; background: var(--card-hi); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 11px; font-family: ui-monospace, "SF Mono", Menlo, monospace; line-height: 1.6; padding: 10px; resize: vertical; min-height: 160px; }
+  .prompt-copy { width: 100%; margin-top: 8px; padding: 10px; border-radius: 10px; border: 1px solid var(--accent-soft); background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 12px; cursor: pointer; }
+  .prompt-copy:hover { background: rgba(230,57,70,0.25); }
+  .prompt-copy.copied { background: rgba(95,216,150,0.15); border-color: rgba(95,216,150,0.3); color: var(--green); }
 </style>
 </head>
 <body>
@@ -78,6 +89,13 @@
     <div class="channel-card"><div class="empty">Memuat Golden Child Stories...</div></div>
     <div class="channel-card"><div class="empty">Memuat Apophenia...</div></div>
     <div class="channel-card"><div class="empty">Memuat Narava...</div></div>
+  </div>
+
+  <div class="prompts-section">
+    <h3 class="section-label">🎨 Image Prompts — Butuh Generate Manual</h3>
+    <div class="prompts-grid" id="prompts-grid">
+      <div class="empty">Memuat...</div>
+    </div>
   </div>
 
   <div class="refresh-note">Dibaca langsung dari repo public masing-masing channel, tidak ada server/database di tengah.</div>
@@ -202,16 +220,73 @@
   // revenge-pipeline dashboard this hub embeds the same pattern from).
   const lastCards = { gc: null, ap: null, nv: null };
 
+  // ---- Image Prompts: topics blocked on manually-generated (Google Flow)
+  // images, ready-to-paste theme + 10 scene prompts. Static site, no
+  // backend/Supabase access — cross-references narava-pipeline's public
+  // content_plan_jun_jul_2026/image_prompts.json against its own
+  // pipeline_status.json (the most recent run per topic id) so a topic
+  // disappears from this list automatically once it actually publishes.
+  let lastPrompts = null;
+
+  async function renderImagePrompts() {
+    const RAW = "https://raw.githubusercontent.com/tezarps/narava-pipeline/main";
+    const [prompts, status] = await Promise.all([
+      fetchJSON(`${RAW}/content_plan_jun_jul_2026/image_prompts.json`),
+      fetchJSON(`${RAW}/pipeline_status.json`),
+    ]);
+    if (!prompts) return null; // fetch failed this cycle, keep previous list
+
+    const runs = (status && status.runs) || [];
+    const latestStatusById = {};
+    for (const r of runs) { // runs are newest-first; keep only the first (latest) seen per id
+      if (!(r.id in latestStatusById)) latestStatusById[r.id] = r.status;
+    }
+
+    return Object.entries(prompts)
+      .filter(([id]) => latestStatusById[id] !== "published")
+      .map(([id, p]) => ({ id, ...p, status: latestStatusById[id] || "pending" }));
+  }
+
+  function promptCardHtml(item) {
+    const block = item.theme + "\n\n" + item.scenes.map((s, i) => `${i + 1}. ${s}`).join("\n");
+    const blockAttr = esc(block);
+    return `<div class="prompt-card">
+      <div class="prompt-head">
+        <span class="prompt-name">${esc(item.topic)}</span>
+        <span class="status-pill pill-${esc(item.status)}">${esc(item.status)}</span>
+      </div>
+      <div class="prompt-angle">${esc(item.angle)}</div>
+      <textarea class="prompt-text" readonly id="prompt-${esc(item.id)}">${blockAttr}</textarea>
+      <button class="prompt-copy" onclick="copyPrompt('${item.id}', this)">📋 Copy Prompt</button>
+    </div>`;
+  }
+
+  window.copyPrompt = function(id, btn) {
+    const ta = document.getElementById(`prompt-${id}`);
+    navigator.clipboard.writeText(ta.value).then(() => {
+      const old = btn.textContent;
+      btn.textContent = "✓ Copied";
+      btn.classList.add("copied");
+      setTimeout(() => { btn.textContent = old; btn.classList.remove("copied"); }, 1500);
+    });
+  };
+
   async function refreshAll() {
-    const [gc, ap, nv] = await Promise.all([renderGoldenChild(), renderApophenia(), renderNarava()]);
+    const [gc, ap, nv, pr] = await Promise.all([
+      renderGoldenChild(), renderApophenia(), renderNarava(), renderImagePrompts(),
+    ]);
     if (gc) lastCards.gc = gc;
     if (ap) lastCards.ap = ap;
     if (nv) lastCards.nv = nv;
+    if (pr) lastPrompts = pr;
     document.getElementById("channels").innerHTML = [
       cardHtml(lastCards.gc, "Golden Child Stories"),
       cardHtml(lastCards.ap, "Apophenia"),
       cardHtml(lastCards.nv, "Narava"),
     ].join("");
+    document.getElementById("prompts-grid").innerHTML = lastPrompts && lastPrompts.length
+      ? lastPrompts.map(promptCardHtml).join("")
+      : `<div class="empty">Semua topic sudah punya gambar ✓</div>`;
   }
   refreshAll();
   setInterval(refreshAll, 60000);
